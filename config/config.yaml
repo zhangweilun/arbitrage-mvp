@@ -1,0 +1,61 @@
+rpc:
+  # Solana RPC 端点
+  endpoint: "https://api.mainnet-beta.solana.com"
+  # 备用 RPC 端点
+  fallback_endpoints:
+    - "https://solana-api.projectserum.com"
+    - "https://rpc.ankr.com/solana"
+
+monitoring:
+  # 监控的 DEX 协议
+  dex_protocols:
+    - "raydium"
+    - "orca"
+  
+  # 最小流动性阈值（美元）
+  min_liquidity: 10000
+  
+  # 最小利润阈值（百分比）
+  min_profit_threshold: 0.5
+  
+  # 最大监控池子数量
+  max_pools: 50
+  
+  # 热门池子刷新间隔（秒）
+  hot_pools_refresh_interval: 300
+
+websocket:
+  # 重连间隔（秒）
+  reconnect_interval: 5
+  # 连接超时（秒）
+  connection_timeout: 30
+
+arbitrage:
+  # 启用简单套利（价格差异）
+  simple_arbitrage: true
+  
+  # 启用三角套利
+  triangular_arbitrage: false
+  
+  # 滑点容差（百分比）
+  slippage_tolerance: 0.5
+  
+  # 最小交易规模（美元）
+  min_trade_size: 100
+
+logging:
+  # 日志级别：DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  # 日志文件路径
+  file: "logs/arbitrage.log"
+  # 最大日志文件大小（MB）
+  max_size: 10
+  # 备份文件数量
+  backup_count: 5
+
+tokens:
+  # 热门代币地址（用于过滤）
+  popular_tokens:
+    - "So11111111111111111111111111111111111111112"  # SOL
+    - "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"  # USDC
+    - "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"  # USDT
