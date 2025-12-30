@@ -29,7 +29,7 @@ class ArbitrageOrchestrator:
             # Raydium 池子
             "raydium": [
                 # SOL/USDC 池子
-                "3ucNos4NbumPLZNWztqGHNFFgkHeRMBQAVemeeomsUxv",
+                "7ckkbzK8RNNzXiFxg5264Vjpwzi64giHZyfLKKmix1NK",
             ],
             "orca": [
                 "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE",  # Orca Whirlpool SOL/USDC
@@ -84,7 +84,7 @@ class ArbitrageOrchestrator:
     
     async def handle_account_update(self, data: Dict):
         """处理来自 WebSocket 的账户更新。
-        
+
         参数:
             data: WebSocket 消息数据
         """
@@ -93,39 +93,158 @@ class ArbitrageOrchestrator:
             if data.get("method") == "accountNotification":
                 result = data.get("params", {}).get("result", {})
                 account_data = result.get("value", {})
-                
+                subscription = data.get("params", {}).get("subscription")
+                context = result.get("context", {})
+
                 if not account_data:
                     return
-                
+
+                # 获取账户地址（从订阅信息中获取）
+                # 需要根据订阅时的映射关系
+                pool_address = self._find_pool_address_by_subscription(subscription)
+                if not pool_address:
+                    logger.debug(f"No pool found for subscription {subscription}")
+                    return
+
                 # 解码账户数据
-                account_str = account_data.get("account", "")
-                data_base64 = account_data.get("data", [None, "base64"])[0]
-                
+                data_list = account_data.get("data", [])
+                if not data_list or len(data_list) < 1:
+                    return
+
+                data_base64 = data_list[0]
+                encoding = data_list[1] if len(data_list) > 1 else "base64"
+
                 if data_base64:
                     try:
                         # Decode base64 data
                         data_bytes = base64.b64decode(data_base64)
-                        
-                        # 解析流动性池数据
-                        # 注意：这是简化的解析。在生产环境中，您需要
-                        # 解析每个 DEX 的特定账户布局。
-                        
-                        # 提取储备金（简化示例）
-                        # 在实际实现中，需要根据 DEX 特定布局解析
-                        if len(data_bytes) >= 32:
-                            # 演示用的占位符储备金解析
-                            # 实际实现需要根据 Raydium/Orca 规范解析
-                            pass
-                        
-                        # 更新池子管理器
-                        # pool_address = account_str  # 需要正确的解析
-                        # self.pool_manager.update_pool(pool_address, reserve_a, reserve_b)
-                        
+
+                        # 根据不同的 DEX 解析储备金数据
+                        pool = self.pool_manager.get_pool(Pubkey.from_string(pool_address))
+
+                        if pool:
+                            reserve_a, reserve_b = self._parse_pool_data(
+                                data_bytes,
+                                pool.dex
+                            )
+
+                            if reserve_a is not None and reserve_b is not None:
+                                # 更新池子储备金
+                                self.pool_manager.update_pool(
+                                    Pubkey.from_string(pool_address),
+                                    reserve_a,
+                                    reserve_b
+                                )
+                                logger.debug(
+                                    f"Updated pool {pool_address[:8]}...: "
+                                    f"reserve_a={reserve_a}, reserve_b={reserve_b}"
+                                )
+
                     except Exception as e:
                         logger.debug(f"Failed to parse account data: {e}")
-        
+
         except Exception as e:
             logger.error(f"Error handling account update: {e}")
+
+    def _find_pool_address_by_subscription(self, subscription_id: int) -> str:
+        """根据订阅 ID 找到对应的池子地址。"""
+        return self.ws_client.subscription_to_pool.get(subscription_id)
+
+    def _parse_pool_data(self, data_bytes: bytes, dex: str):
+        """根据 DEX 类型解析池子数据。
+
+        参数:
+            data_bytes: 解码后的字节数据
+            dex: DEX 类型 ('raydium' 或 'orca')
+
+        返回:
+            (reserve_a, reserve_b) 或 (None, None) 如果解析失败
+        """
+        try:
+            if dex == "raydium":
+                return self._parse_raydium_pool(data_bytes)
+            elif dex == "orca":
+                return self._parse_orca_whirlpool(data_bytes)
+            else:
+                logger.warning(f"Unsupported DEX: {dex}")
+                return None, None
+        except Exception as e:
+            logger.error(f"Failed to parse {dex} pool data: {e}")
+            return None, None
+
+    def _parse_raydium_pool(self, data_bytes: bytes):
+        """解析 Raydium 池子数据。
+
+        Raydium liquidity pool account layout:
+        - 8 bytes: discriminator
+        - 32 bytes: token_a mint
+        - 32 bytes: token_b mint
+        - 8 bytes: token_a reserve (u64)
+        - 8 bytes: token_b reserve (u64)
+        - ... other fields
+
+        注意：这是简化版本，实际 Raydium 账户布局可能更复杂
+        """
+        if len(data_bytes) < 80:  # 最小长度检查
+            return None, None
+
+        import struct
+
+        # 跳过 8 字节 discriminator 和 64 字节 token addresses (32+32)
+        # reserve_a 在 offset 72 (8+64)
+        reserve_a = struct.unpack("<Q", data_bytes[72:80])[0]
+
+        # reserve_b 在 offset 80
+        reserve_b = struct.unpack("<Q", data_bytes[80:88])[0]
+
+        return reserve_a, reserve_b
+
+    def _parse_orca_whirlpool(self, data_bytes: bytes):
+        """解析 Orca Whirlpool 数据。
+
+        Orca Whirlpool account layout:
+        - 8 bytes: discriminator
+        - 32 bytes: token_a mint
+        - 32 bytes: token_b mint
+        - 8 bytes: tick_current_index (i32)
+        - 8 bytes: sqrt_price (u128)
+        - 8 bytes: liquidity (u128)
+        - 8 bytes: fee_rate (u16)
+        - ... other fields
+
+        注意：Whirlpool 使用不同的价格模型，这里需要转换 sqrt_price 到储备金
+        """
+        if len(data_bytes) < 88:
+            return None, None
+
+        import struct
+
+        # Orca Whirlpool 使用 sqrt_price，不是直接存储储备金
+        # 这里需要从 sqrt_price 和 liquidity 计算储备金
+        # 简化实现，仅返回当前 liquidity 作为参考
+
+        # 跳过 8 字节 discriminator 和 64 字节 token addresses
+        # tick_current_index 在 offset 72
+        tick_current_index = struct.unpack("<i", data_bytes[72:76])[0]
+
+        # sqrt_price 在 offset 80 (u128, 占 16 字节)
+        sqrt_price_low = struct.unpack("<Q", data_bytes[80:88])[0]
+        sqrt_price_high = struct.unpack("<Q", data_bytes[88:96])[0]
+
+        # liquidity 在 offset 96 (u128, 占 16 字节)
+        liquidity_low = struct.unpack("<Q", data_bytes[96:104])[0]
+        liquidity_high = struct.unpack("<Q", data_bytes[104:112])[0]
+
+        # 合并 128 位值
+        sqrt_price = sqrt_price_low + (sqrt_price_high << 64)
+        liquidity = liquidity_low + (liquidity_high << 64)
+
+        logger.debug(f"Orca Whirlpool: tick={tick_current_index}, "
+                    f"sqrt_price={sqrt_price}, liquidity={liquidity}")
+
+        # TODO: 实现从 sqrt_price 计算储备金的逻辑
+        # 这是一个复杂的计算，涉及 tick 和价格公式
+        return None, None
     
     async def monitor_prices(self):
         """监控价格并检测套利机会。"""

@@ -29,6 +29,9 @@ websocket:
   reconnect_interval: 5
   # 连接超时（秒）
   connection_timeout: 30
+  # 代理地址（可选）
+  # 格式示例: "http://username:password@proxy-server:port"
+  proxy: "http://127.0.0.1:7897"
 
 arbitrage:
   # 启用简单套利（价格差异）
